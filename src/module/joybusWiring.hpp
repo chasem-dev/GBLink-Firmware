@@ -12,20 +12,23 @@ namespace joybus
         uint8_t txPin;
         uint8_t rxPin;
         bool autoProbe;   // safe to try unasked: never pulls down one of the GBA's outputs
-        bool inverted;    // both lines the other way up (idle low)
+        bool invertTx;    // the line it sends on the other way up (resting low)
+        bool invertRx;    // the line it listens on the other way up
     };
 
     /* GPIO: 0 SC, 1 SI, 2 SO, 3 SD (GBA cable), 4 SD (GBC cable). A GBC cable crosses SO and SI. */
     inline constexpr Wiring wirings[] = {
-        { 2, 1, true,  false },  // 0: send on SO (the GBA's SI on a GBC cable), hear SI (its SO): GBATEK's,
+        { 2, 1, true,  false, false },  // 0: send on SO (the GBA's SI on a GBC cable), hear SI (its SO): GBATEK's,
                                  //    and what a GameCube-GBA cable's chip joins into the GameCube's one line
-        { 2, 2, true,  false },  // 1: SO alone (the GBA's SI): a GBA that answers on the line it listens on
-        { 4, 4, true,  false },  // 2: SD alone, GBC cable
-        { 3, 3, true,  false },  // 3: SD alone, GBA cable
-        { 1, 2, false, false },  // 4: send on SI, hear SO: only for a cable that doesn't cross them
-        { 1, 1, false, false },  // 5: SI alone
-        { 2, 1, true,  true  },  // 6: as 0 with both lines the other way up, in case the cable's chip inverts
-                                 //    them. Tried only while the GBA's SO rests low (module/joybus.cpp).
+        { 2, 2, true,  false, false },  // 1: SO alone (the GBA's SI): a GBA that answers on the line it listens on
+        { 4, 4, true,  false, false },  // 2: SD alone, GBC cable
+        { 3, 3, true,  false, false },  // 3: SD alone, GBA cable
+        { 1, 2, false, false, false },  // 4: send on SI, hear SO: only for a cable that doesn't cross them
+        { 1, 1, false, false, false },  // 5: SI alone
+        { 2, 1, true,  true,  true  },  // 6: as 0 with both lines the other way up, in case the cable's chip inverts
+                                        //    them. Tried only while the GBA's SO rests low (module/joybus.cpp).
+        { 2, 1, true,  false, true  },  // 7: as 0, hearing the GBA's SO the other way up: a cable whose chip is
+                                        //    one transistor from SO to the line. Tried only while SO rests low.
     };
     inline constexpr uint8_t wiringCount = sizeof(wirings) / sizeof(wirings[0]);
     inline constexpr uint8_t wiringAuto = 0xFF;

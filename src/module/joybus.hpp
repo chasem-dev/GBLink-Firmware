@@ -25,7 +25,7 @@
  *   0x52 SetBitLength [0x52, us]       the GameCube's bits: 4 (the default) or 5 us
  *        reply (data) [0x53, ...] as GetState
  *   0x53 GetState     [0x53]
- *        reply (data) [0x53, protocol 2, wiring (0xFF none yet), fixed, bitUs, wiringCount]
+ *        reply (data) [0x53, protocol 3, wiring (0xFF none yet), fixed, bitUs, wiringCount]
  *   0x54 Diagnose     [0x54, flags]   flags bit 0: also measure how fast the lines the wirings send on rise
  *                                     (each is pulled low for 20 us: only while the GBA isn't answering)
  *        reply (data) [0x54, 1, wiringCount, wiring in use, found | fixed << 1, bitUs,
@@ -34,6 +34,10 @@
  *                      then for each wiring: tries (16 bits, low byte first), replies (16 bits),
  *                      where the last unanswered one stopped (joybusProgram.h's JOYBUS_AT_*), the most
  *                      reply bits an unanswered one got]
+ *   0x55 LastReplies  [0x55]          what came back that wasn't a whole GBA reply, for seeing a link that half works
+ *        reply (data) [0x55, 1, partial: wiring, bits, where it stopped, the bits (32, low byte first; the first
+ *                      received highest of them), how many so far (16 bits);
+ *                      odd (a whole reply to a status or reset that isn't a GBA's): wiring, 3 bytes, how many (16 bits)]
  *
  * Which pins carry the bus depends on the cable and isn't documented for sure, so by default the
  * adapter finds them (joybusWiring.hpp): when a status (0x00) or reset (0xFF) command gets no
@@ -43,7 +47,7 @@
 class JoybusModule : public IModule
 {
 public:
-    static constexpr uint8_t protocolVersion = 2;
+    static constexpr uint8_t protocolVersion = 3;
 
     enum class Command : uint8_t
     {
@@ -52,6 +56,7 @@ public:
         SetBitLength = 0x52,
         GetState = 0x53,
         Diagnose = 0x54,
+        LastReplies = 0x55,
     };
 
     JoybusModule();
@@ -73,6 +78,13 @@ private:
     void usePins(uint8_t wiring);
     void sendState();
     void sendDiagnosis(bool riseTimes);
+    void sendLastReplies();
+
+    uint8_t m_partialWiring = 0xFF, m_partialBits = 0, m_partialStage = 0;
+    uint32_t m_partialRaw = 0;
+    uint16_t m_partialCount = 0;
+    uint8_t m_oddWiring = 0xFF, m_odd[3] = {};
+    uint16_t m_oddCount = 0;
     int sendOn(uint8_t wiring, const uint8_t* tx, unsigned txLen, uint8_t* rx, unsigned rxLen);
 
     struct WiringStats
