@@ -81,6 +81,8 @@ void JoybusModule::handle(const Request& request)
         return sendState();
     case Command::Diagnose:
         return sendDiagnosis(request.length >= 2 && (request.data[1] & 1));
+    case Command::LastReplies:
+        return sendLastReplies();
     }
 }
 
@@ -88,14 +90,14 @@ void JoybusModule::usePins(uint8_t wiring)
 {
     if (wiring == m_pins) return;
     m_pins = wiring;
-    joybus_set_pins(joybus::wirings[wiring].txPin, joybus::wirings[wiring].rxPin, joybus::wirings[wiring].inverted);
+    joybus_set_pins(joybus::wirings[wiring].txPin, joybus::wirings[wiring].rxPin, joybus::wirings[wiring].invertTx, joybus::wirings[wiring].invertRx);
 }
 
 /* One command on a wiring, counted for Diagnose. */
 int JoybusModule::sendOn(uint8_t wiring, const uint8_t* tx, unsigned txLen, uint8_t* rx, unsigned rxLen)
 {
     const joybus::Wiring& w = joybus::wirings[wiring];
-    if (w.inverted && wiring != m_search.wiring()) {
+    if ((w.invertTx || w.invertRx) && wiring != m_search.wiring()) {
         /* lines the other way up rest low: tried only when the GBA's line does, so a GBA that rests
          * high never gets a command upside down */
         usePins(0);
@@ -109,10 +111,23 @@ int JoybusModule::sendOn(uint8_t wiring, const uint8_t* tx, unsigned txLen, uint
     const int n = joybus_transfer(tx, txLen, rx, rxLen, replySlackUs);
     if (n > 0) {
         if (stats.replies < 0xFFFF) stats.replies++;
+        /* a whole reply to a status or reset that isn't a GBA's: kept, as it may be one read the wrong way up */
+        if (txLen == 1 && rxLen == 3 && (tx[0] == 0x00 || tx[0] == 0xFF) && !joybus::isGbaType(rx, n)) {
+            m_oddWiring = wiring;
+            m_odd[0] = rx[0]; m_odd[1] = rx[1]; m_odd[2] = rx[2];
+            if (m_oddCount < 0xFFFF) m_oddCount++;
+        }
     } else {
         uint8_t bits = 0;
         joybus_last_failure(&stats.lastStage, &bits);
         if (bits > stats.mostBits) stats.mostBits = bits;
+        if (bits) {
+            m_partialWiring = wiring;
+            m_partialBits = bits;
+            m_partialStage = stats.lastStage;
+            m_partialRaw = joybus_last_failure_raw();
+            if (m_partialCount < 0xFFFF) m_partialCount++;
+        }
     }
     return n;
 }
@@ -194,5 +209,19 @@ void JoybusModule::sendDiagnosis(bool riseTimes)
         p[4] = m_stats[w].lastStage;
         p[5] = m_stats[w].mostBits;
     }
+    Transport::sendData(std::span<const uint8_t>(d, sizeof(d)));
+}
+
+void JoybusModule::sendLastReplies()
+{
+    const uint8_t d[] = {
+        static_cast<uint8_t>(Command::LastReplies), 1,
+        m_partialWiring, m_partialBits, m_partialStage,
+        static_cast<uint8_t>(m_partialRaw), static_cast<uint8_t>(m_partialRaw >> 8),
+        static_cast<uint8_t>(m_partialRaw >> 16), static_cast<uint8_t>(m_partialRaw >> 24),
+        static_cast<uint8_t>(m_partialCount), static_cast<uint8_t>(m_partialCount >> 8),
+        m_oddWiring, m_odd[0], m_odd[1], m_odd[2],
+        static_cast<uint8_t>(m_oddCount), static_cast<uint8_t>(m_oddCount >> 8),
+    };
     Transport::sendData(std::span<const uint8_t>(d, sizeof(d)));
 }

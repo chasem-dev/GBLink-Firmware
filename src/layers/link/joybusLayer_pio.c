@@ -21,7 +21,8 @@ static unsigned g_bit_us = 5;
 static uint g_offset = 0;
 static uint g_wrap = 0;
 static unsigned g_tx_pin = 2, g_rx_pin = 1;
-static bool g_inverted = false;
+static bool g_invert_tx = false, g_invert_rx = false;
+static uint32_t g_fail_raw = 0;
 static bool g_push_pull = true;    /* what the loaded program does (two lines) */
 static uint32_t g_last_end = 0;    /* when the last command ended (time_us_32) */
 static uint8_t g_fail_stage = 0, g_fail_bits = 0;
@@ -93,10 +94,8 @@ static void configure(void)
 
     pio_gpio_init(g_pio, g_tx_pin);
     gpio_pull_up(g_tx_pin);
-    if (push_pull && g_inverted) {
-        gpio_set_outover(g_tx_pin, GPIO_OVERRIDE_INVERT);
-        gpio_set_inover(g_rx_pin, GPIO_OVERRIDE_INVERT);
-    }
+    if (push_pull && g_invert_tx) gpio_set_outover(g_tx_pin, GPIO_OVERRIDE_INVERT);
+    if (push_pull && g_invert_rx) gpio_set_inover(g_rx_pin, GPIO_OVERRIDE_INVERT);
     idle_tx();
 
     pio_sm_init(g_pio, g_sm, g_offset, &c);
@@ -127,11 +126,12 @@ void joybus_stop(void)
     g_started = false;
 }
 
-void joybus_set_pins(unsigned tx_pin, unsigned rx_pin, bool inverted)
+void joybus_set_pins(unsigned tx_pin, unsigned rx_pin, bool invert_tx, bool invert_rx)
 {
     g_tx_pin = tx_pin;
     g_rx_pin = rx_pin;
-    g_inverted = inverted && tx_pin != rx_pin;
+    g_invert_tx = invert_tx && tx_pin != rx_pin;
+    g_invert_rx = invert_rx && tx_pin != rx_pin;
     if (g_started) configure();
 }
 
@@ -158,6 +158,8 @@ int joybus_transfer(const uint8_t* tx, unsigned tx_len, uint8_t* rx, unsigned rx
                 pio_sm_set_enabled(g_pio, g_sm, false);
                 const unsigned pc = pio_sm_get_pc(g_pio, g_sm);
                 pio_sm_clear_fifos(g_pio, g_sm);
+                pio_sm_exec(g_pio, g_sm, JB_PUSH_NOBLOCK);   /* the bits that came */
+                g_fail_raw = pio_sm_is_rx_fifo_empty(g_pio, g_sm) ? 0 : pio_sm_get(g_pio, g_sm);
                 pio_sm_exec(g_pio, g_sm, JB_MOV_ISR_Y);
                 pio_sm_exec(g_pio, g_sm, JB_PUSH_NOBLOCK);
                 const uint32_t left = pio_sm_is_rx_fifo_empty(g_pio, g_sm) ? rx_len * 8 - 1 : pio_sm_get(g_pio, g_sm);
@@ -181,6 +183,8 @@ void joybus_last_failure(uint8_t* stage, uint8_t* bits)
     *stage = g_fail_stage;
     *bits = g_fail_bits;
 }
+
+uint32_t joybus_last_failure_raw(void) { return g_fail_raw; }
 
 void joybus_sample_pins(uint8_t* seen_high, uint8_t* seen_low)
 {

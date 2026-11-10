@@ -19,9 +19,9 @@ void joybus_stop(void);
 
 /* Which link pins to use (GPIO numbers): the adapter sends on tx_pin and reads rx_pin; the same
  * pin for a GBA that talks on the line it listens on (then, and only then, the line is open
- * drain: pulled low or released, never driven high). `inverted`: both lines the other way up
- * (two lines only). Every other link pin is left released, pulled up. */
-void joybus_set_pins(unsigned tx_pin, unsigned rx_pin, bool inverted);
+ * drain: pulled low or released, never driven high). `invert_tx`, `invert_rx`: that line the
+ * other way up, resting low (two lines only). Every other link pin is left released, pulled up. */
+void joybus_set_pins(unsigned tx_pin, unsigned rx_pin, bool invert_tx, bool invert_rx);
 
 /* One command (tx_len bytes, 1..5) and its reply (rx_len bytes, 1..5). Returns rx_len, or -1
  * when the reply didn't all come within the time a reply takes plus `slack_us`. Commands are kept
@@ -32,6 +32,8 @@ int joybus_transfer(const uint8_t* tx, unsigned tx_len, uint8_t* rx, unsigned rx
 /* Why the last joybus_transfer returned -1: where the program was waiting (JOYBUS_AT_* in
  * joybusProgram.h), and how many of the reply's bits had come. */
 void joybus_last_failure(uint8_t* stage, uint8_t* bits);
+/* The bits that had come (the first received highest of the `bits` low ones). */
+uint32_t joybus_last_failure_raw(void);
 
 /* The link pins' levels over about 2 ms (bit n: GPIO n): which were seen high, and which low. */
 void joybus_sample_pins(uint8_t* seen_high, uint8_t* seen_low);
