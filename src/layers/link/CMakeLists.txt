@@ -2,6 +2,7 @@ zephyr_library_sources_ifdef(CONFIG_SOC_FAMILY_RPI_PICO gbLinkLayer.c)
 zephyr_library_sources_ifdef(CONFIG_SOC_FAMILY_RPI_PICO gbaLinkLayer.cpp)
 zephyr_library_sources_ifdef(CONFIG_SOC_FAMILY_RPI_PICO rfuLinkLayer.c)
 zephyr_library_sources_ifdef(CONFIG_SOC_FAMILY_RPI_PICO linkPinctrl.c)
+zephyr_library_sources_ifdef(CONFIG_SOC_FAMILY_RPI_PICO joybusLayer_pio.c)
 
 
 add_subdirectory(ereader)

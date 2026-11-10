@@ -35,6 +35,7 @@ Manual update
 | **GBA e-Reader** | `0x05` | Nintendo e-Reader emulation. SetMode third byte: `1` SMA4 US, `2` Pokémon RS US, `3` SMA4 JPN, `4` Pokémon RS JPN, `5`–`9` SMA4 EUR En/Fr/De/Es/It, `10` Pokémon Emerald US, `11` Pokémon Emerald JPN, `12` (Émeraude) / Emerald, `13` (Smaragd) / Emerald. |
 | **GBA Battle Chip Gate** | `0x06` | Mega Man Battle Network Battle Chip Gate / Progress / Beast Link |
 | **GBA Wireless Adapter** | `0x07` | Wireless Adapter emulation: trade and battle with FireRed/LeafGreen on Nintendo Switch through a companion ESP32 running [GB-Link Switch LDN](https://github.com/GB-Link/GB-Link-Switch-LDN) |
+| **GameCube JOY Bus** | `0x08` | Be a GameCube's controller port for a GBA, for GameCube games and ports that link to one |
 
 ---
 
@@ -126,6 +127,7 @@ Commands are sent over the WebUSB command endpoint:
 | `0x10–0x1F` | GBA Link | `0x10` SetPlayerSettings (`[0x10, player count 2–4, seat]`, seat 0 is the GBA that hosts the link), `0x12` StartHandshake, `0x13` ConnectLink. Link data travels as 17-byte packets: the seat, then 8 link words. |
 | `0x30–0x3F` | GB Link | `0x30` SetTimingConfig, `0x31` EnterPrinter, `0x32` ExitPrinter, `0x33`–`0x3E` the GB Link mode's settings (see [GB Link Mode](#gb-link-mode)) |
 | `0x40–0x4F` | Hardware | `0x40` Voltage3V3, `0x41` Voltage5V, `0x42` SetLEDColor, `0x43` RebootBootloader, `0x44` SetWebUsbLanding, `0x45` GetLedConfig, `0x46` SetModeLedColor, `0x47` ResetLedColors, `0x48` Reboot, `0x4c` GetRfuIsrStats |
+| `0x50–0x5F` | GameCube JOY Bus | `0x50` Transfer, `0x51` SetWiring, `0x52` SetBitLength, `0x53` GetState (below) |
 | `0x44` | SetWebUsbLanding | (`data[1]`: 1 = on, 0 = off) persists whether the adapter advertises the **launcher.gblink.io** WebUSB landing page (the browser "open site" prompt on connect). It's stored in flash and applies on the next reconnect. The current state is reported as a 5th byte in the `0x0F` GetFirmwareInfo response. |
 | `0x45` | GetLedConfig | returns the persisted per-mode LED colours: `[0x45, count, r,g,b …]` (slots: 0 idle, 1 GBA/Celio, 2 GB/GBC, 3 printer, 4 Advance Wars, 5 e-Reader, 6 Battle Chip Gate). |
 | `0x46` | SetModeLedColor | (`[0x46, slot, r, g, b]`) persists a mode's colour (applied on next entry to that mode |
@@ -170,6 +172,19 @@ All numbers are little-endian. The section checksum adds up the bytes, each one 
 A **section** exchanges a whole block in passive mode: load it with `39`, then data packets, check it with `3A` and start it with `3B`. The adapter answers the waiting byte until the Game Boy sends the preamble byte, answers the preamble while the Game Boy repeats it, then sends the block while keeping the Game Boy's block. Poll `3C` until it is done, read the Game Boy's block with `3D`, then return with `3E`. Pokémon Gold, Silver and Crystal exchange their data this way.
 
 ---
+
+## GameCube JOY Bus mode
+
+In mode `0x08` the adapter does what a GameCube does on a controller port with the GameCube–GBA cable: the host sends each JOY Bus command, the adapter sends it to the GBA and returns the GBA's reply. It is for GameCube games and ports that talk to a GBA, such as the Pokémon Colosseum port. The GBA has to be in JOY Bus mode: the Pokémon Ruby, Sapphire, Emerald, FireRed and LeafGreen cartridges are at their copyright screen, and so are the programs a GameCube sends to a GBA.
+
+| Command | Sent | Reply (data channel) |
+|:---|:---|:---|
+| `0x50` Transfer | `[0x50, seq, txLen, rxLen, tx…]` (lengths 1–5; `rxLen \| 0x80`: then a status command at once) | `[0x50, seq, result, wiring, n, rx…]`: result 0 replied, 1 no reply, 2 bad request; then, with `0x80`, `[statusResult, 3 status bytes]` |
+| `0x51` SetWiring | `[0x51, wiring]` (`0xFF` find it, the default) | as GetState |
+| `0x52` SetBitLength | `[0x52, 4 or 5]`: the length of the GameCube's bits in µs (default 4) | as GetState |
+| `0x53` GetState | `[0x53]` | `[0x53, protocol (1), wiring (0xFF none yet), fixed, bit µs, wiring count]` |
+
+Which link pins carry the bus isn't documented for certain, so the adapter finds them: when a status (`0x00`) or reset (`0xFF`) command gets no answer, it tries the same command on each wiring in `src/module/joybusWiring.hpp` that never pulls one of the GBA's outputs low, and keeps the first one a GBA answers. Only those two commands are ever sent twice, because they change nothing on the GBA. The bus is open drain: the adapter only ever pulls a line low. Use a GBC link cable (all six wires). The JOY Bus program is tested in a PIO emulator against a model GBA (`make -C tests/host pio`).
 
 # How to bring GBAs online 
 

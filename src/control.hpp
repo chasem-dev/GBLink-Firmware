@@ -6,6 +6,9 @@
 #include "module/eReader.hpp"
 #include "module/battleChipGate.hpp"
 #include "module/rfuWireless.hpp"
+#ifdef CONFIG_SOC_FAMILY_RPI_PICO
+#include "module/joybus.hpp"
+#endif
 #include "sections/eReaderProtocolSection.hpp"
 #include "sections/battleChipGateSection.hpp"
 #include "sections/rfuProtocolSection.hpp"
@@ -35,6 +38,7 @@ class Control
         gbaEreader = 0x05,
         battleChipGate = 0x06,
         rfuWireless = 0x07,
+        gcJoybus = 0x08,
     };
 
     static constexpr uint8_t callSetModeId = 0x01;
@@ -173,6 +177,21 @@ public:
                 sendLinkStatus(LinkStatus::LinkClosed);
                 break;
             }
+
+#ifdef CONFIG_SOC_FAMILY_RPI_PICO
+            case Mode::gcJoybus:
+            {
+                // A GameCube's controller port with a GBA on it (module/joybus.hpp)
+                applyLedForSlot(LED_SLOT_GBA);
+
+                JoybusModule joybusModule;
+                m_currentModule = &joybusModule;
+                joybusModule.execute();
+
+                sendLinkStatus(LinkStatus::LinkClosed);
+                break;
+            }
+#endif
         }
 
         m_currentModule = nullptr;
