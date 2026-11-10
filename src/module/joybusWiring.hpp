@@ -12,16 +12,20 @@ namespace joybus
         uint8_t txPin;
         uint8_t rxPin;
         bool autoProbe;   // safe to try unasked: never pulls down one of the GBA's outputs
+        bool inverted;    // both lines the other way up (idle low)
     };
 
     /* GPIO: 0 SC, 1 SI, 2 SO, 3 SD (GBA cable), 4 SD (GBC cable). A GBC cable crosses SO and SI. */
     inline constexpr Wiring wirings[] = {
-        { 2, 1, true  },  // 0: send on SO (the GBA's SI on a GBC cable), hear SI (its SO): GBATEK's
-        { 2, 2, true  },  // 1: SO alone (the GBA's SI): a GBA that answers on the line it listens on
-        { 4, 4, true  },  // 2: SD alone, GBC cable
-        { 3, 3, true  },  // 3: SD alone, GBA cable
-        { 1, 2, false },  // 4: send on SI, hear SO: only for a cable that doesn't cross them
-        { 1, 1, false },  // 5: SI alone
+        { 2, 1, true,  false },  // 0: send on SO (the GBA's SI on a GBC cable), hear SI (its SO): GBATEK's,
+                                 //    and what a GameCube-GBA cable's chip joins into the GameCube's one line
+        { 2, 2, true,  false },  // 1: SO alone (the GBA's SI): a GBA that answers on the line it listens on
+        { 4, 4, true,  false },  // 2: SD alone, GBC cable
+        { 3, 3, true,  false },  // 3: SD alone, GBA cable
+        { 1, 2, false, false },  // 4: send on SI, hear SO: only for a cable that doesn't cross them
+        { 1, 1, false, false },  // 5: SI alone
+        { 2, 1, true,  true  },  // 6: as 0 with both lines the other way up, in case the cable's chip inverts
+                                 //    them. Tried only while the GBA's SO rests low (module/joybus.cpp).
     };
     inline constexpr uint8_t wiringCount = sizeof(wirings) / sizeof(wirings[0]);
     inline constexpr uint8_t wiringAuto = 0xFF;
@@ -46,6 +50,8 @@ namespace joybus
             const bool probe = txLen == 1 && rxLen == 3 && (tx[0] == 0x00 || tx[0] == 0xFF);
             int n = send(m_wiring, tx, txLen, rx, rxLen);
             if (!probe) return n;
+            /* a GBA just switched on often misses the first command (a status changes nothing: asked again) */
+            if (!(n > 0 && isGbaType(rx, n)) && !m_found && !m_fixed) n = send(m_wiring, tx, txLen, rx, rxLen);
 
             if (n > 0 && isGbaType(rx, n)) {
                 found();

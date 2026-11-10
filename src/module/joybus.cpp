@@ -8,7 +8,7 @@
 #include "../layers/transport.hpp"
 
 /* a reply's time beyond the bits themselves: the GBA's turnaround */
-static constexpr uint32_t replySlackUs = 100;
+static constexpr uint32_t replySlackUs = 500;
 
 JoybusModule::JoybusModule()
 {
@@ -69,7 +69,7 @@ void JoybusModule::handle(const Request& request)
         }
         return sendState();
     case Command::SetBitLength:
-        if (request.length >= 2 && (request.data[1] == 4 || request.data[1] == 5) && request.data[1] != m_bitUs) {
+        if (request.length >= 2 && request.data[1] >= 4 && request.data[1] <= 7 && request.data[1] != m_bitUs) {
             m_bitUs = request.data[1];
             joybus_stop();
             joybus_start(m_bitUs);
@@ -79,6 +79,8 @@ void JoybusModule::handle(const Request& request)
         return sendState();
     case Command::GetState:
         return sendState();
+    case Command::Diagnose:
+        return sendDiagnosis(request.length >= 2 && (request.data[1] & 1));
     }
 }
 
@@ -86,7 +88,33 @@ void JoybusModule::usePins(uint8_t wiring)
 {
     if (wiring == m_pins) return;
     m_pins = wiring;
-    joybus_set_pins(joybus::wirings[wiring].txPin, joybus::wirings[wiring].rxPin);
+    joybus_set_pins(joybus::wirings[wiring].txPin, joybus::wirings[wiring].rxPin, joybus::wirings[wiring].inverted);
+}
+
+/* One command on a wiring, counted for Diagnose. */
+int JoybusModule::sendOn(uint8_t wiring, const uint8_t* tx, unsigned txLen, uint8_t* rx, unsigned rxLen)
+{
+    const joybus::Wiring& w = joybus::wirings[wiring];
+    if (w.inverted && wiring != m_search.wiring()) {
+        /* lines the other way up rest low: tried only when the GBA's line does, so a GBA that rests
+         * high never gets a command upside down */
+        usePins(0);
+        uint8_t high = 0, low = 0;
+        joybus_sample_pins(&high, &low);
+        if (high & (1u << w.rxPin)) return -1;
+    }
+    usePins(wiring);
+    WiringStats& stats = m_stats[wiring];
+    if (stats.tries < 0xFFFF) stats.tries++;
+    const int n = joybus_transfer(tx, txLen, rx, rxLen, replySlackUs);
+    if (n > 0) {
+        if (stats.replies < 0xFFFF) stats.replies++;
+    } else {
+        uint8_t bits = 0;
+        joybus_last_failure(&stats.lastStage, &bits);
+        if (bits > stats.mostBits) stats.mostBits = bits;
+    }
+    return n;
 }
 
 void JoybusModule::transfer(const Request& request)
@@ -104,8 +132,7 @@ void JoybusModule::transfer(const Request& request)
         return;
     }
     auto send = [this](uint8_t wiring, const uint8_t* tx, unsigned txLen, uint8_t* rx, unsigned rxLen) {
-        usePins(wiring);
-        return joybus_transfer(tx, txLen, rx, rxLen, replySlackUs);
+        return sendOn(wiring, tx, txLen, rx, rxLen);
     };
     const int n = m_search.transfer(send, &request.data[4], txLen, &reply[5], rxLen);
     usePins(m_search.wiring());   // back on the wiring in use after a search that found nothing
@@ -136,4 +163,36 @@ void JoybusModule::sendState()
         joybus::wiringCount,
     };
     Transport::sendData(std::span<const uint8_t>(state, sizeof(state)));
+}
+
+void JoybusModule::sendDiagnosis(bool riseTimes)
+{
+    uint8_t d[13 + joybus::wiringCount * 6] = {};
+    d[0] = static_cast<uint8_t>(Command::Diagnose);
+    d[1] = 1;
+    d[2] = joybus::wiringCount;
+    d[3] = m_search.wiring();
+    d[4] = static_cast<uint8_t>((m_search.isFound() ? 1 : 0) | (m_search.isFixed() ? 2 : 0));
+    d[5] = m_bitUs;
+    joybus_sample_pins(&d[6], &d[7]);
+    for (unsigned pin = 0; pin < 5; pin++) d[8 + pin] = 0xFE;
+    if (riseTimes) {
+        /* only the lines a wiring tried unasked sends on: the others may be the GBA's outputs */
+        for (uint8_t w = 0; w < joybus::wiringCount; w++) {
+            const unsigned pin = joybus::wirings[w].txPin;
+            if (joybus::wirings[w].autoProbe && d[8 + pin] == 0xFE) d[8 + pin] = joybus_rise_time(pin);
+        }
+        m_pins = 0xFF;
+        usePins(m_search.wiring());
+    }
+    for (uint8_t w = 0; w < joybus::wiringCount; w++) {
+        uint8_t* p = &d[13 + w * 6];
+        p[0] = static_cast<uint8_t>(m_stats[w].tries);
+        p[1] = static_cast<uint8_t>(m_stats[w].tries >> 8);
+        p[2] = static_cast<uint8_t>(m_stats[w].replies);
+        p[3] = static_cast<uint8_t>(m_stats[w].replies >> 8);
+        p[4] = m_stats[w].lastStage;
+        p[5] = m_stats[w].mostBits;
+    }
+    Transport::sendData(std::span<const uint8_t>(d, sizeof(d)));
 }

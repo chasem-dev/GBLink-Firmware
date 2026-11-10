@@ -127,7 +127,7 @@ Commands are sent over the WebUSB command endpoint:
 | `0x10–0x1F` | GBA Link | `0x10` SetPlayerSettings (`[0x10, player count 2–4, seat]`, seat 0 is the GBA that hosts the link), `0x12` StartHandshake, `0x13` ConnectLink. Link data travels as 17-byte packets: the seat, then 8 link words. |
 | `0x30–0x3F` | GB Link | `0x30` SetTimingConfig, `0x31` EnterPrinter, `0x32` ExitPrinter, `0x33`–`0x3E` the GB Link mode's settings (see [GB Link Mode](#gb-link-mode)) |
 | `0x40–0x4F` | Hardware | `0x40` Voltage3V3, `0x41` Voltage5V, `0x42` SetLEDColor, `0x43` RebootBootloader, `0x44` SetWebUsbLanding, `0x45` GetLedConfig, `0x46` SetModeLedColor, `0x47` ResetLedColors, `0x48` Reboot, `0x4c` GetRfuIsrStats |
-| `0x50–0x5F` | GameCube JOY Bus | `0x50` Transfer, `0x51` SetWiring, `0x52` SetBitLength, `0x53` GetState (below) |
+| `0x50–0x5F` | GameCube JOY Bus | `0x50` Transfer, `0x51` SetWiring, `0x52` SetBitLength, `0x53` GetState, `0x54` Diagnose (below) |
 | `0x44` | SetWebUsbLanding | (`data[1]`: 1 = on, 0 = off) persists whether the adapter advertises the **launcher.gblink.io** WebUSB landing page (the browser "open site" prompt on connect). It's stored in flash and applies on the next reconnect. The current state is reported as a 5th byte in the `0x0F` GetFirmwareInfo response. |
 | `0x45` | GetLedConfig | returns the persisted per-mode LED colours: `[0x45, count, r,g,b …]` (slots: 0 idle, 1 GBA/Celio, 2 GB/GBC, 3 printer, 4 Advance Wars, 5 e-Reader, 6 Battle Chip Gate). |
 | `0x46` | SetModeLedColor | (`[0x46, slot, r, g, b]`) persists a mode's colour (applied on next entry to that mode |
@@ -181,10 +181,19 @@ In mode `0x08` the adapter does what a GameCube does on a controller port with t
 |:---|:---|:---|
 | `0x50` Transfer | `[0x50, seq, txLen, rxLen, tx…]` (lengths 1–5; `rxLen \| 0x80`: then a status command at once) | `[0x50, seq, result, wiring, n, rx…]`: result 0 replied, 1 no reply, 2 bad request; then, with `0x80`, `[statusResult, 3 status bytes]` |
 | `0x51` SetWiring | `[0x51, wiring]` (`0xFF` find it, the default) | as GetState |
-| `0x52` SetBitLength | `[0x52, 4 or 5]`: the length of the GameCube's bits in µs (default 4) | as GetState |
-| `0x53` GetState | `[0x53]` | `[0x53, protocol (1), wiring (0xFF none yet), fixed, bit µs, wiring count]` |
+| `0x52` SetBitLength | `[0x52, 4 to 7]`: the length of the GameCube's bits in µs (default 5; a console's are 4.94) | as GetState |
+| `0x53` GetState | `[0x53]` | `[0x53, protocol (2), wiring (0xFF none yet), fixed, bit µs, wiring count]` |
+| `0x54` Diagnose | `[0x54, flags]` (bit 0: also time how fast the lines it sends on rise) | `[0x54, 1, wiring count, wiring, found \| fixed << 1, bit µs, pins seen high, pins seen low, rise µs of GPIO 0–4, then per wiring: tries (16 bits), replies (16 bits), where the last unanswered command stopped, most reply bits an unanswered one got]` |
 
-Which link pins carry the bus isn't documented for certain, so the adapter finds them: when a status (`0x00`) or reset (`0xFF`) command gets no answer, it tries the same command on each wiring in `src/module/joybusWiring.hpp` that never pulls one of the GBA's outputs low, and keeps the first one a GBA answers. Only those two commands are ever sent twice, because they change nothing on the GBA. The bus is open drain: the adapter only ever pulls a line low. Use a GBC link cable (all six wires). The JOY Bus program is tested in a PIO emulator against a model GBA (`make -C tests/host pio`).
+Which link pins carry the bus isn't documented for certain, so the adapter finds them: when a status (`0x00`) or reset (`0xFF`) command gets no answer, it tries the same command on each wiring in `src/module/joybusWiring.hpp` that never pulls one of the GBA's outputs low, and keeps the first one a GBA answers. Only those two commands are ever sent twice, because they change nothing on the GBA. Use a GBC link cable (all six wires).
+
+What is known, and what the mode does about it:
+
+- A GameCube–GBA cable has a chip in it, powered by the GBA, that joins the GBA's SI and SO into the GameCube's one data line. So the first wiring sends on the adapter's SO (the GBA's SI through a GBC cable) and listens on its SI (the GBA's SO). That line of the adapter's own is driven high and low, as in the other modes. Wirings that share one line with the GBA are open drain: the adapter only pulls them low.
+- Measured on that cable ([libjoybus](https://github.com/loopj/libjoybus)): the GBA answers 6.6 µs after a command with 3.81 µs bits, takes commands of 6 to 322 kHz, and misses a command that follows another within 64 µs. The adapter keeps commands 150 µs apart and reads each reply bit 1.9 µs after it starts.
+- A GBA that has just been switched on often misses the first command, so an unanswered status is sent once more before other wirings are tried.
+
+`Diagnose` is for finding out why a GBA doesn't answer: the levels of the five link pins, how many commands each wiring sent and had answered, and where an unanswered one stopped (no reply bit, a line stuck low, or a reply that broke off after some bits). The JOY Bus program is tested in a PIO emulator against a model GBA (`make -C tests/host pio`).
 
 # How to bring GBAs online 
 

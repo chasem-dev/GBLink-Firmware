@@ -28,8 +28,9 @@ CYCLES_PER_US = 4
 
 SHIM = r"""
 #include "%s"
-unsigned build(uint16_t* out, unsigned bit_us, unsigned* wrap) { return joybus_build_program(out, bit_us, wrap); }
-unsigned pack(const uint8_t* tx, unsigned tx_len, unsigned rx_len, uint32_t* words) { return joybus_pack_command(tx, tx_len, rx_len, words); }
+unsigned build(uint16_t* out, unsigned bit_us, int push_pull, unsigned* wrap) { return joybus_build_program(out, bit_us, push_pull, wrap); }
+unsigned pack(const uint8_t* tx, unsigned tx_len, unsigned rx_len, int push_pull, uint32_t* words) { return joybus_pack_command(tx, tx_len, rx_len, push_pull, words); }
+unsigned sample_delay(void) { return JOYBUS_SAMPLE_DELAY; }
 unsigned reply_words(unsigned rx_len) { return joybus_reply_words(rx_len); }
 void unpack(const uint32_t* words, unsigned rx_len, uint8_t* rx) { joybus_unpack_reply(words, rx_len, rx); }
 """
@@ -48,17 +49,17 @@ def load_shim():
 C, TMPDIR = load_shim()
 
 
-def program(bit_us):
+def program(bit_us, push_pull):
     buf = (ctypes.c_uint16 * 32)()
     wrap = ctypes.c_uint()
-    n = C.build(buf, bit_us, ctypes.byref(wrap))
+    n = C.build(buf, bit_us, int(push_pull), ctypes.byref(wrap))
     assert n, f"no program for {bit_us} us bits"
     return list(buf[:n]), wrap.value
 
 
-def pack(tx, rx_len):
+def pack(tx, rx_len, push_pull):
     words = (ctypes.c_uint32 * 3)()
-    n = C.pack((ctypes.c_uint8 * 5)(*tx), len(tx), rx_len, words)
+    n = C.pack((ctypes.c_uint8 * 5)(*tx), len(tx), rx_len, int(push_pull), words)
     return list(words[:n])
 
 
@@ -72,34 +73,36 @@ def unpack(words, rx_len):
 # ---------------------------------------------------------------- the encoding, against an assembler
 def check_encoding():
     for bit_us in (4, 5):
-        q = bit_us
-        src = f"""
+        for push_pull in (False, True):
+            q = bit_us
+            low, high, bit = ("set pins, 0", "set pins, 1", "out pins, 1") if push_pull else ("set pindirs, 1", "set pindirs, 0", "out pindirs, 1")
+            src = f"""
 .program joybus
     pull block
     out x, 8
     out y, 8
     pull block
 txbit:
-    set pindirs, 1 [{q - 1}]
-    out pindirs, 1 [{2 * q - 2}]
+    {low} [{q - 1}]
+    {bit} [{2 * q - 2}]
     pull ifempty noblock
-    set pindirs, 0 [{q - 2}]
+    {high} [{q - 2}]
     jmp x-- txbit
-    set pindirs, 1 [{q - 1}]
-    set pindirs, 0
+    {low} [{q - 1}]
+    {high}
     wait 1 pin 0
 rxbit:
-    wait 0 pin 0 [8]
+    wait 0 pin 0 [{C.sample_delay()}]
     in pins, 1
     wait 1 pin 0
     jmp y-- rxbit
     push block
 """
-        want = list(adafruit_pioasm.assemble(src))
-        got, wrap = program(bit_us)
-        assert got == want, f"{bit_us} us: encoding differs\n got  {[hex(x) for x in got]}\n want {[hex(x) for x in want]}"
-        assert wrap == len(got) - 1
-    print("encoding: matches the assembler (4 and 5 us bits)")
+            want = list(adafruit_pioasm.assemble(src))
+            got, wrap = program(bit_us, push_pull)
+            assert got == want, f"{bit_us} us: encoding differs\n got  {[hex(x) for x in got]}\n want {[hex(x) for x in want]}"
+            assert wrap == len(got) - 1
+    print("encoding: matches the assembler (4 and 5 us bits, open drain and push-pull)")
 
 
 # ---------------------------------------------------------------- the model GBA
@@ -108,10 +111,12 @@ class Gba:
 
     Receiving: each low pulse is a bit, a 1 when shorter than 2 us; the first byte gives the
     command's length (5 bytes for a write, else 1), and the low pulse after it is the stop bit. The reply starts
-    `delay_us` after the stop bit's rising edge: each bit low 1 us (a 1) or 3 us (a 0) of a 4 us
-    bit, each length jittered by up to `jitter` of itself, then the GBA's stop bit (2 us low)."""
+    `delay_us` after the stop bit's rising edge: each bit low a quarter (a 1) or three quarters (a 0)
+    of a `bit_us` bit (a GBA's are 3.81 us), each length jittered by up to `jitter` of itself, then
+    the GBA's stop bit (2 us low)."""
 
-    def __init__(self, replies, delay_us=3.0, jitter=0.05, seed=1, silent=False):
+    def __init__(self, replies, delay_us=3.0, jitter=0.05, seed=1, silent=False, bit_us=3.81):
+        self.bit = bit_us * CYCLES_PER_US
         self.replies = replies          # function(command bytes) -> reply bytes
         self.delay = delay_us * CYCLES_PER_US
         self.jitter = jitter
@@ -132,8 +137,8 @@ class Gba:
         for byte in data:
             for i in range(7, -1, -1):
                 bit = (byte >> i) & 1
-                length = 4 * CYCLES_PER_US * (1 + self.rng.uniform(-self.jitter, self.jitter))
-                low = (1 if bit else 3) * CYCLES_PER_US * (1 + self.rng.uniform(-self.jitter, self.jitter))
+                length = self.bit * (1 + self.rng.uniform(-self.jitter, self.jitter))
+                low = (1 if bit else 3) * self.bit / 4 * (1 + self.rng.uniform(-self.jitter, self.jitter))
                 out.append((t, t + low))
                 t += length
         out.append((t, t + 2 * CYCLES_PER_US))   # stop bit
@@ -181,23 +186,30 @@ class Gba:
 
 
 def run_transactions(bit_us, two_lines, transactions, gba, max_cycles=40000):
+    push_pull = two_lines   # as the firmware: a line of the adapter's own is driven, a shared one open drain
     """Run the program over `transactions` [(command, reply length)], feeding the TX FIFO the way
     the firmware does (all of a transaction's words at once, the next when the reply is in).
     Returns the replies read, or None for a transaction still waiting when time ran out."""
-    prog, wrap = program(bit_us)
+    prog, wrap = program(bit_us, push_pull)
     tx_pin = 1 if two_lines else 0   # the emulator reads pins from 0: the RX pin is pin 0
     rx_pin = 0
     pending = list(transactions)
     replies = []
     state_box = {"want": None, "words": []}
 
+    def pulls_low(state):
+        # open drain: the output latch is 0, so a set pindir pulls low (the emulator keeps no latch apart
+        # from the pin's level, so only the direction is looked at); push-pull: an output at 0
+        out = bool(state.pin_directions & (1 << tx_pin))
+        return out and not state.pin_values & (1 << tx_pin) if push_pull else out
+
     def source(state: State) -> int:
-        adapter_low = bool(state.pin_directions & (1 << tx_pin))   # output latch 0: a set pindir pulls low
-        level = gba.line(state.clock, adapter_low)
+        level = gba.line(state.clock, pulls_low(state))
         return level << rx_pin if two_lines else level
 
     first = pending.pop(0)
-    state = State(transmit_fifo=deque(pack(*first)))
+    rest = (1 << tx_pin) if push_pull else 0   # push-pull: an output resting high
+    state = State(transmit_fifo=deque(pack(*first, push_pull)), pin_directions=rest, pin_values=rest)
     state_box["want"] = first
 
     def stop_when(_, s):
@@ -208,9 +220,8 @@ def run_transactions(bit_us, two_lines, transactions, gba, max_cycles=40000):
                             out_base=tx_pin, out_count=1, set_base=tx_pin, set_count=1, wrap_target=0, wrap_top=wrap):
         # the emulator runs an instruction's delay by moving its clock on: a pin it changed changed
         # when it started, at before.clock
-        changed = (before.pin_directions ^ after.pin_directions) & (1 << tx_pin)
-        if changed:
-            gba.adapter_edge(before.clock, 0 if after.pin_directions & (1 << tx_pin) else 1)
+        if pulls_low(before) != pulls_low(after):
+            gba.adapter_edge(before.clock, 0 if pulls_low(after) else 1)
         # the CPU: take the reply's words as they arrive, then give the next transaction
         while after.receive_fifo:
             state_box["words"].append(after.receive_fifo.popleft())
@@ -222,7 +233,7 @@ def run_transactions(bit_us, two_lines, transactions, gba, max_cycles=40000):
             if pending:
                 nxt = pending.pop(0)
                 state_box["want"] = nxt
-                after.transmit_fifo.extend(pack(*nxt))
+                after.transmit_fifo.extend(pack(*nxt, push_pull))
         if not state_box["want"] and not pending and after.clock > gba.reply_end + 40:
             break
     if state_box["want"]:
@@ -256,10 +267,11 @@ TRANSACTIONS = [
 def check_round_trips():
     for bit_us in (4, 5):
         for two_lines in (True, False):
-            for delay_us, jitter, seed in ((2.0, 0.0, 1), (3.0, 0.05, 2), (12.0, 0.08, 3), (60.0, 0.05, 4)):
-                gba = Gba(gba_replies, delay_us=delay_us, jitter=jitter, seed=seed)
+            # (the reply's delay, jitter, seed, the GBA's bit length: 3.81 us measured, and either side of it)
+            for delay_us, jitter, seed, gba_bit in ((2.0, 0.0, 1, 3.81), (6.6, 0.05, 2, 3.81), (12.0, 0.08, 3, 3.5), (60.0, 0.05, 4, 4.2)):
+                gba = Gba(gba_replies, delay_us=delay_us, jitter=jitter, seed=seed, bit_us=gba_bit)
                 replies, end = run_transactions(bit_us, two_lines, TRANSACTIONS, gba)
-                label = f"{bit_us} us bits, {'two lines' if two_lines else 'one line'}, reply after {delay_us} us, jitter {jitter:.0%}"
+                label = f"{bit_us} us bits, {'two lines, driven' if two_lines else 'one line, open drain'}, {gba_bit} us reply bits after {delay_us} us, jitter {jitter:.0%}"
                 assert gba.received == [t[0] for t in TRANSACTIONS], f"{label}: the GBA got {gba.received}"
                 want = [gba_replies(t[0]) for t in TRANSACTIONS]
                 assert replies == want, f"{label}: read {replies}, want {want}"
@@ -282,7 +294,8 @@ def check_no_reply():
 def check_packing():
     for tx in ([0x00], [0x14], [0x15, 1, 2, 3, 4], [0xFF]):
         for rx_len in (1, 3, 5):
-            words = pack(tx, rx_len)
+            words = pack(tx, rx_len, False)
+            assert pack(tx, rx_len, True)[1] == words[1] ^ 0xFFFFFFFF   # push-pull: the bits as they are
             assert words[0] >> 24 == len(tx) * 8 - 1 and (words[0] >> 16) & 0xFF == rx_len * 8 - 1
             assert len(words) == (3 if len(tx) > 4 else 2)
     assert unpack([0x00000408], 3) == [0x00, 0x04, 0x08]

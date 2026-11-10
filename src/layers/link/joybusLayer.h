@@ -12,19 +12,33 @@
 extern "C" {
 #endif
 
-/* Take the PIO and load the program, with the GameCube's bits `bit_us` long (4 or 5). The lines
- * are left released until joybus_set_pins. */
+/* Take the PIO, with the GameCube's bits `bit_us` long (4 to 7). The lines are left released
+ * until joybus_set_pins. */
 bool joybus_start(unsigned bit_us);
 void joybus_stop(void);
 
-/* Which link pins to use (GPIO numbers): the adapter pulls tx_pin low to send and reads rx_pin;
- * the same pin for a GBA that talks on the line it listens on. Every other link pin is left
- * released, pulled up. */
-void joybus_set_pins(unsigned tx_pin, unsigned rx_pin);
+/* Which link pins to use (GPIO numbers): the adapter sends on tx_pin and reads rx_pin; the same
+ * pin for a GBA that talks on the line it listens on (then, and only then, the line is open
+ * drain: pulled low or released, never driven high). `inverted`: both lines the other way up
+ * (two lines only). Every other link pin is left released, pulled up. */
+void joybus_set_pins(unsigned tx_pin, unsigned rx_pin, bool inverted);
 
 /* One command (tx_len bytes, 1..5) and its reply (rx_len bytes, 1..5). Returns rx_len, or -1
- * when the reply didn't all come within the time a reply takes plus `slack_us`. */
+ * when the reply didn't all come within the time a reply takes plus `slack_us`. Commands are kept
+ * JOYBUS_GAP_US apart: a GBA misses one that follows another sooner (64 us measured). */
+#define JOYBUS_GAP_US 150u
 int joybus_transfer(const uint8_t* tx, unsigned tx_len, uint8_t* rx, unsigned rx_len, uint32_t slack_us);
+
+/* Why the last joybus_transfer returned -1: where the program was waiting (JOYBUS_AT_* in
+ * joybusProgram.h), and how many of the reply's bits had come. */
+void joybus_last_failure(uint8_t* stage, uint8_t* bits);
+
+/* The link pins' levels over about 2 ms (bit n: GPIO n): which were seen high, and which low. */
+void joybus_sample_pins(uint8_t* seen_high, uint8_t* seen_low);
+
+/* How long `pin` takes to rise once released after being pulled low for 20 us, in microseconds
+ * (0: under one; 0xFF: it didn't within 250, so something holds it low). The bus must be idle. */
+uint8_t joybus_rise_time(unsigned pin);
 
 #ifdef __cplusplus
 }
