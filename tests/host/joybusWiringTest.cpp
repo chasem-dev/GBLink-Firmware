@@ -46,7 +46,8 @@ static const uint8_t kReset[] = { 0xFF };
 static const uint8_t kWrite[] = { 0x15, 1, 2, 3, 4 };
 static const uint8_t kRead[] = { 0x14 };
 
-static int probe(WiringSearch& s, FakeGba& g, const uint8_t* cmd = kStatus)
+template <class Gba>
+static int probe(WiringSearch& s, Gba& g, const uint8_t* cmd = kStatus)
 {
     uint8_t rx[5];
     return s.transfer(g, cmd, 1, rx, 3);
@@ -124,6 +125,31 @@ static void testSwitchedOffKeepsTheWiringThenLooksAgain()
     CHECK(s.wiring() == 3);
 }
 
+static void testAsksAgainWhenTheFirstCommandIsMissed()
+{
+    // a GBA just switched on often misses the first command: the status is asked again on the same wiring
+    struct Deaf : FakeGba
+    {
+        int misses = 1;
+        int operator()(uint8_t wiring, const uint8_t* tx, unsigned txLen, uint8_t* rx, unsigned rxLen)
+        {
+            if (wiring == answersOn && misses > 0) { misses--; sent.push_back({ wiring, tx[0] }); return -1; }
+            return FakeGba::operator()(wiring, tx, txLen, rx, rxLen);
+        }
+    };
+    WiringSearch s;
+    Deaf g;
+    g.answersOn = 0;
+    CHECK(probe(s, g) == 3);
+    CHECK(s.wiring() == 0 && s.isFound());
+    CHECK(g.sent.size() == 2 && g.sent[0].first == 0 && g.sent[1].first == 0);
+    // found: an unanswered status is not asked again (the game asks anyway)
+    g.misses = 1;
+    g.sent.clear();
+    CHECK(probe(s, g) == -1);
+    CHECK(g.sent.size() == 1);
+}
+
 static void testFixedWiringNeverSearches()
 {
     WiringSearch s;
@@ -149,6 +175,7 @@ int main()
     testAnotherDeviceIsNotAGba();
     testSwitchedOffKeepsTheWiringThenLooksAgain();
     testFixedWiringNeverSearches();
+    testAsksAgainWhenTheFirstCommandIsMissed();
     if (g_failures) {
         std::printf("%d failure(s)\n", g_failures);
         return 1;

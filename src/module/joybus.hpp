@@ -25,7 +25,15 @@
  *   0x52 SetBitLength [0x52, us]       the GameCube's bits: 4 (the default) or 5 us
  *        reply (data) [0x53, ...] as GetState
  *   0x53 GetState     [0x53]
- *        reply (data) [0x53, protocol 1, wiring (0xFF none yet), fixed, bitUs, wiringCount]
+ *        reply (data) [0x53, protocol 2, wiring (0xFF none yet), fixed, bitUs, wiringCount]
+ *   0x54 Diagnose     [0x54, flags]   flags bit 0: also measure how fast the lines the wirings send on rise
+ *                                     (each is pulled low for 20 us: only while the GBA isn't answering)
+ *        reply (data) [0x54, 1, wiringCount, wiring in use, found | fixed << 1, bitUs,
+ *                      pins seen high, pins seen low (bit n: GPIO n; 0 SC, 1 SI, 2 SO, 3 SD GBA cable, 4 SD GBC cable),
+ *                      rise time of GPIO 0..4 in us (0xFE not measured, 0xFF held low),
+ *                      then for each wiring: tries (16 bits, low byte first), replies (16 bits),
+ *                      where the last unanswered one stopped (joybusProgram.h's JOYBUS_AT_*), the most
+ *                      reply bits an unanswered one got]
  *
  * Which pins carry the bus depends on the cable and isn't documented for sure, so by default the
  * adapter finds them (joybusWiring.hpp): when a status (0x00) or reset (0xFF) command gets no
@@ -35,7 +43,7 @@
 class JoybusModule : public IModule
 {
 public:
-    static constexpr uint8_t protocolVersion = 1;
+    static constexpr uint8_t protocolVersion = 2;
 
     enum class Command : uint8_t
     {
@@ -43,6 +51,7 @@ public:
         SetWiring = 0x51,
         SetBitLength = 0x52,
         GetState = 0x53,
+        Diagnose = 0x54,
     };
 
     JoybusModule();
@@ -63,6 +72,17 @@ private:
     void transfer(const Request& request);
     void usePins(uint8_t wiring);
     void sendState();
+    void sendDiagnosis(bool riseTimes);
+    int sendOn(uint8_t wiring, const uint8_t* tx, unsigned txLen, uint8_t* rx, unsigned rxLen);
+
+    struct WiringStats
+    {
+        uint16_t tries = 0;
+        uint16_t replies = 0;
+        uint8_t lastStage = 0;
+        uint8_t mostBits = 0;
+    };
+    WiringStats m_stats[joybus::wiringCount];
 
     char m_queueBuffer[8 * sizeof(Request)] __aligned(4);
     struct k_msgq m_queue;
@@ -70,5 +90,5 @@ private:
 
     joybus::WiringSearch m_search;
     uint8_t m_pins = 0xFF;         // the wiring the pins are set up for
-    uint8_t m_bitUs = 4;
+    uint8_t m_bitUs = 5;           // a GameCube's bits are 4.94 us
 };
