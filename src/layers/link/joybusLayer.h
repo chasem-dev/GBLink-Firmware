@@ -28,7 +28,7 @@ void joybus_set_pins(unsigned tx_pin, unsigned rx_pin, bool invert_tx, bool inve
 /* One command (tx_len bytes, 1..5) and its reply (rx_len bytes, 1..5). Returns rx_len, or -1
  * when the reply didn't all come within the time a reply takes plus `slack_us`. Commands are kept
  * JOYBUS_GAP_US apart: a GBA misses one that follows another sooner (64 us measured). */
-#define JOYBUS_GAP_US 150u
+#define JOYBUS_GAP_US 80u
 int joybus_transfer(const uint8_t* tx, unsigned tx_len, uint8_t* rx, unsigned rx_len, uint32_t slack_us);
 
 /* Why the last joybus_transfer returned -1: where the program was waiting (JOYBUS_AT_* in

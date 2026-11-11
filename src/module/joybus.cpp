@@ -10,9 +10,14 @@
 /* a reply's time beyond the bits themselves: the GBA's turnaround */
 static constexpr uint32_t replySlackUs = 500;
 
+/* Storage kept off the main thread's stack (1 KB), where the module itself is: the queue of host
+ * commands (each up to a WriteMany's 59 bytes) and the one being handled. One module exists at a time. */
+static char g_queueBuffer[8 * 64] __aligned(4);
+
 JoybusModule::JoybusModule()
 {
-    k_msgq_init(&m_queue, m_queueBuffer, sizeof(Request), 8);
+    static_assert(sizeof(Request) == 64, "the queue's storage is sized for 64-byte requests");
+    k_msgq_init(&m_queue, g_queueBuffer, sizeof(Request), 8);
 }
 
 void JoybusModule::cancel()
@@ -45,7 +50,7 @@ void JoybusModule::execute()
     m_pins = 0xFF;
     usePins(m_search.wiring());
 
-    Request request;
+    static Request request;
     while (!m_cancel) {
         if (k_msgq_get(&m_queue, &request, K_FOREVER) != 0) continue;
         if (m_cancel) break;
@@ -81,6 +86,8 @@ void JoybusModule::handle(const Request& request)
         return sendDiagnosis(request.length >= 2 && (request.data[1] & 1));
     case Command::LastReplies:
         return sendLastReplies();
+    case Command::WriteMany:
+        return writeMany(request);
     }
 }
 
@@ -232,4 +239,36 @@ void JoybusModule::sendLastReplies()
         static_cast<uint8_t>(m_oddCount), static_cast<uint8_t>(m_oddCount >> 8),
     };
     Transport::sendData(std::span<const uint8_t>(d, sizeof(d)));
+}
+
+void JoybusModule::writeMany(const Request& request)
+{
+    uint8_t reply[5] = { static_cast<uint8_t>(Command::WriteMany), request.length >= 2 ? request.data[1] : uint8_t(0), 2, 0, 0 };
+    const unsigned count = request.length >= 3 ? request.data[2] : 0;
+    if (count < 1 || count > 14 || request.length < 3 + count * 4) {
+        Transport::sendData(std::span<const uint8_t>(reply, sizeof(reply)));
+        return;
+    }
+    const uint8_t wiring = m_search.wiring();
+    static const uint8_t status[] = { 0x00 };
+    uint8_t result = 0, done = 0, last = 0;
+    for (unsigned i = 0; i < count && !result; i++) {
+        uint8_t tx[5] = { 0x15, request.data[3 + i * 4], request.data[4 + i * 4], request.data[5 + i * 4], request.data[6 + i * 4] };
+        uint8_t rx[1];
+        if (sendOn(wiring, tx, 5, rx, 1) != 1) { result = 1; break; }
+        done++;
+        /* the GBA has taken the word when its receive flag is clear: a game waits up to 100 ms for that */
+        for (unsigned tries = 0;; tries++) {
+            uint8_t st[3];
+            if (sendOn(wiring, status, 1, st, 3) != 3 || !joybus::isGbaType(st, 3)) { result = 1; break; }
+            last = st[2];
+            if (!(st[2] & 0x02)) break;
+            if (tries >= 400) { result = 4; break; }
+            k_busy_wait(250);
+        }
+    }
+    reply[2] = result;
+    reply[3] = done;
+    reply[4] = last;
+    Transport::sendData(std::span<const uint8_t>(reply, sizeof(reply)));
 }
