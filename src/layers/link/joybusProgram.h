@@ -15,7 +15,10 @@
  *    take it high. Nothing ever drives the line high.
  *  - push-pull (a line of the adapter's own, to one of the GBA's inputs): the pin is an output and
  *    the program sets its level, as the adapter's other modes do. A pull-up through a level
- *    shifter may be too slow for a 1 us pulse; a driven edge isn't.
+ *    shifter may be too slow for a 1 us pulse; a driven edge isn't. While the GBA replies, its
+ *    reply is echoed onto this line: on a GameCube's cable both are one wire, so the GBA's input
+ *    hears its own reply, and a GBA whose input stays high stops after two bytes (seen on a
+ *    FireRed: 00 04 and no status byte).
  *
  * Clock: JOYBUS_CYCLES_PER_US PIO cycles a microsecond.
  *
@@ -39,7 +42,7 @@ extern "C" {
 #endif
 
 #define JOYBUS_CYCLES_PER_US 4u
-#define JOYBUS_PROGRAM_MAX 18u
+#define JOYBUS_PROGRAM_MAX 24u
 
 /* After the falling edge that starts a reply bit, when to sample it (cycles, and one more for the
  * read): about 1.9 us, halfway between the end of a 1's low (0.95 us) and of a 0's (2.86 us). */
@@ -48,7 +51,8 @@ extern "C" {
 /* Where the program is when no reply comes (from its first instruction), for diagnostics */
 #define JOYBUS_AT_LINE_HIGH 11u   /* waiting for the line to go back up after the command */
 #define JOYBUS_AT_BIT_START 12u   /* waiting for a reply bit to start */
-#define JOYBUS_AT_BIT_END 14u     /* waiting for a reply bit's low to end */
+#define JOYBUS_AT_BIT_END 15u     /* waiting for a reply bit's low to end */
+#define JOYBUS_AT_STOP 19u        /* the reply is read; waiting for the GBA's stop bit */
 
 /* instruction encodings (RP2040 datasheet, 3.4), with no side-set */
 #define JB_DELAY(d) ((uint16_t)(((d) & 0x1fu) << 8))
@@ -99,11 +103,17 @@ static inline unsigned joybus_build_program(uint16_t* out, unsigned bit_us, int 
     out[n++] = high;                                            /* 10: let go */
     out[n++] = JB_WAIT_PIN(1, 0);                               /* 11: the line back up (a shared line rises slowly) */
     const unsigned rx_bit = n;
-    out[n++] = JB_WAIT_PIN(0, 0) | JB_DELAY(JOYBUS_SAMPLE_DELAY); /* 12: a bit starts; wait... */
-    out[n++] = JB_IN_PINS(1);                                   /* 13: ...and read it */
-    out[n++] = JB_WAIT_PIN(1, 0);                               /* 14: its end */
-    out[n++] = JB_JMP(JB_JMP_Y_DEC, rx_bit);                    /* 15 */
-    out[n++] = JB_PUSH(0, 1);                                   /* 16: what is left of the reply */
+    out[n++] = JB_WAIT_PIN(0, 0);                               /* 12: a bit starts */
+    out[n++] = (push_pull ? low : high) | JB_DELAY(JOYBUS_SAMPLE_DELAY - 1); /* 13: echoed (two lines); wait... */
+    out[n++] = JB_IN_PINS(1);                                   /* 14: ...and read it */
+    out[n++] = JB_WAIT_PIN(1, 0);                               /* 15: its end */
+    out[n++] = high;                                            /* 16: echoed */
+    out[n++] = JB_JMP(JB_JMP_Y_DEC, rx_bit);                    /* 17 */
+    out[n++] = JB_PUSH(0, 1);                                   /* 18: what is left of the reply */
+    out[n++] = JB_WAIT_PIN(0, 0);                               /* 19: the GBA's stop bit, echoed too (the driver */
+    out[n++] = push_pull ? low : high;                          /* 20:  restarts the program if none comes) */
+    out[n++] = JB_WAIT_PIN(1, 0);                               /* 21 */
+    out[n++] = high;                                            /* 22 */
     *wrap = n - 1;
     return n;
 }

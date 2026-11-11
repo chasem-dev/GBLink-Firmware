@@ -92,11 +92,17 @@ txbit:
     {high}
     wait 1 pin 0
 rxbit:
-    wait 0 pin 0 [{C.sample_delay()}]
+    wait 0 pin 0
+    {low if push_pull else high} [{C.sample_delay() - 1}]
     in pins, 1
     wait 1 pin 0
+    {high}
     jmp y-- rxbit
     push block
+    wait 0 pin 0
+    {low if push_pull else high}
+    wait 1 pin 0
+    {high}
 """
             want = list(adafruit_pioasm.assemble(src))
             got, wrap = program(bit_us, push_pull)
@@ -205,7 +211,8 @@ def run_transactions(bit_us, two_lines, transactions, gba, max_cycles=40000):
         return out and not state.pin_values & (1 << tx_pin) if push_pull else out
 
     def source(state: State) -> int:
-        level = gba.line(state.clock, pulls_low(state))
+        # two lines: the listening line carries only what the GBA sends (the adapter echoes it on its own line)
+        level = gba.line(state.clock, pulls_low(state) and not two_lines)
         return level << rx_pin if two_lines else level
 
     first = pending.pop(0)
@@ -221,7 +228,8 @@ def run_transactions(bit_us, two_lines, transactions, gba, max_cycles=40000):
                             out_base=tx_pin, out_count=1, set_base=tx_pin, set_count=1, wrap_target=0, wrap_top=wrap):
         # the emulator runs an instruction's delay by moving its clock on: a pin it changed changed
         # when it started, at before.clock
-        if pulls_low(before) != pulls_low(after):
+        echoing = before.program_counter >= 12   # past the command: the adapter's line only echoes the reply
+        if pulls_low(before) != pulls_low(after) and not echoing:
             gba.adapter_edge(before.clock, 0 if pulls_low(after) else 1)
         # the CPU: take the reply's words as they arrive, then give the next transaction
         while after.receive_fifo:

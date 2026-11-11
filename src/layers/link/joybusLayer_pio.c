@@ -150,6 +150,8 @@ int joybus_transfer(const uint8_t* tx, unsigned tx_len, uint8_t* rx, unsigned rx
     uint32_t words[3];
     const unsigned n = joybus_pack_command(tx, tx_len, rx_len, g_push_pull, words);
     while (time_us_32() - g_last_end < JOYBUS_GAP_US) {}
+    /* still waiting for the last reply's stop bit (none came): back to the start */
+    if (pio_sm_get_pc(g_pio, g_sm) != g_offset + JOYBUS_OFFSET_START) reset_sm();
     /* the state machine waits at its first pull: the words all fit in the FIFO */
     pio_sm_clear_fifos(g_pio, g_sm);
     for (unsigned i = 0; i < n; i++) pio_sm_put(g_pio, g_sm, words[i]);
