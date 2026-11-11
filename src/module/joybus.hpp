@@ -24,10 +24,12 @@
  *        reply (data) [0x53, ...] as GetState
  *   0x52 SetBitLength [0x52, us]       the GameCube's bits, 4 to 16 us; 0: find it (the default): until a GBA
  *                                     answers, status and reset commands go out at 5 us (a console's speed)
- *                                     and 16 us (for an adapter whose lines are slow) in turn
+ *                                     and 16 us (for an adapter whose lines are slow) in turn; one found
+ *                                     at 16 us is tried at 5 us again from time to time (protocol 6: for as
+ *                                     long as it stays slow)
  *        reply (data) [0x53, ...] as GetState
  *   0x53 GetState     [0x53]
- *        reply (data) [0x53, protocol 5, wiring (0xFF none yet), fixed, bitUs, wiringCount]
+ *        reply (data) [0x53, protocol 6, wiring (0xFF none yet), fixed, bitUs, wiringCount]
  *   0x54 Diagnose     [0x54, flags]   flags bit 0: also measure how fast the lines the wirings send on rise
  *                                     (each is pulled low for 20 us: only while the GBA isn't answering)
  *        reply (data) [0x54, 1, wiringCount, wiring in use, found | fixed << 1, bitUs,
@@ -62,7 +64,7 @@
 class JoybusModule : public IModule
 {
 public:
-    static constexpr uint8_t protocolVersion = 5;
+    static constexpr uint8_t protocolVersion = 6;
 
     enum class Command : uint8_t
     {
@@ -123,5 +125,7 @@ private:
     uint8_t m_bitUs = 5;           // a GameCube's bits are 4.94 us
     bool m_autoBits = true;        // until a GBA answers, 5 and 16 us in turn
     uint8_t m_fastTries = 0;       // found with 16 us bits: how often 5 us has been tried since
+    uint8_t m_fastSkipped = 0;     // and how many commands since the last try, once those are used up
     void useBits(uint8_t bitUs);
+    void tryFastBits();
 };
