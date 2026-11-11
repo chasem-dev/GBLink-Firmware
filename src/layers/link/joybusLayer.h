@@ -12,10 +12,12 @@
 extern "C" {
 #endif
 
-/* Take the PIO, with the GameCube's bits `bit_us` long (4 to 7). The lines are left released
+/* Take the PIO, with the GameCube's bits `bit_us` long (4 to 16). The lines are left released
  * until joybus_set_pins. */
 bool joybus_start(unsigned bit_us);
 void joybus_stop(void);
+/* Change the length of the GameCube's bits (4 to 16 us) while running. */
+void joybus_set_bit_us(unsigned bit_us);
 
 /* Which link pins to use (GPIO numbers): the adapter sends on tx_pin and reads rx_pin; the same
  * pin for a GBA that talks on the line it listens on (then, and only then, the line is open

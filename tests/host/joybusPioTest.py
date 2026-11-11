@@ -115,7 +115,8 @@ class Gba:
     of a `bit_us` bit (a GBA's are 3.81 us), each length jittered by up to `jitter` of itself, then
     the GBA's stop bit (2 us low)."""
 
-    def __init__(self, replies, delay_us=3.0, jitter=0.05, seed=1, silent=False, bit_us=3.81):
+    def __init__(self, replies, delay_us=3.0, jitter=0.05, seed=1, silent=False, bit_us=3.81, command_bit_us=4):
+        self.half = command_bit_us / 2 * CYCLES_PER_US   # a command bit's low is a 1 when shorter than half the bit
         self.bit = bit_us * CYCLES_PER_US
         self.replies = replies          # function(command bytes) -> reply bytes
         self.delay = delay_us * CYCLES_PER_US
@@ -167,15 +168,15 @@ class Gba:
             self.end_of_command(clock)
 
     def command_length(self):
-        first = int("".join("1" if p < 2 * CYCLES_PER_US else "0" for p in self.pulses[:8]), 2)
+        first = int("".join("1" if p < self.half else "0" for p in self.pulses[:8]), 2)
         return 5 if first == 0x15 else 1
 
     def end_of_command(self, clock):
         pulses = self.pulses
         self.pulses = []
         *data, stop = pulses
-        bits = "".join("1" if p < 2 * CYCLES_PER_US else "0" for p in data)
-        assert stop < 2 * CYCLES_PER_US, f"the stop bit is {stop / CYCLES_PER_US} us low"
+        bits = "".join("1" if p < self.half else "0" for p in data)
+        assert stop < self.half, f"the stop bit is {stop / CYCLES_PER_US} us low"
         assert len(bits) % 8 == 0, f"a command of {len(bits)} bits"
         cmd = [int(bits[i:i + 8], 2) for i in range(0, len(bits), 8)]
         self.received.append(cmd)
@@ -265,12 +266,12 @@ TRANSACTIONS = [
 
 
 def check_round_trips():
-    for bit_us in (4, 5):
+    for bit_us in (4, 5, 16):
         for two_lines in (True, False):
             # (the reply's delay, jitter, seed, the GBA's bit length: 3.81 us measured, and either side of it)
             for delay_us, jitter, seed, gba_bit in ((2.0, 0.0, 1, 3.81), (6.6, 0.05, 2, 3.81), (12.0, 0.08, 3, 3.5), (60.0, 0.05, 4, 4.2)):
-                gba = Gba(gba_replies, delay_us=delay_us, jitter=jitter, seed=seed, bit_us=gba_bit)
-                replies, end = run_transactions(bit_us, two_lines, TRANSACTIONS, gba)
+                gba = Gba(gba_replies, delay_us=delay_us, jitter=jitter, seed=seed, bit_us=gba_bit, command_bit_us=bit_us)
+                replies, end = run_transactions(bit_us, two_lines, TRANSACTIONS, gba, max_cycles=40000 * bit_us // 4)
                 label = f"{bit_us} us bits, {'two lines, driven' if two_lines else 'one line, open drain'}, {gba_bit} us reply bits after {delay_us} us, jitter {jitter:.0%}"
                 assert gba.received == [t[0] for t in TRANSACTIONS], f"{label}: the GBA got {gba.received}"
                 want = [gba_replies(t[0]) for t in TRANSACTIONS]

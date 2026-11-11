@@ -105,7 +105,7 @@ static void configure(void)
 
 bool joybus_start(unsigned bit_us)
 {
-    if (bit_us < 4 || bit_us > 7) return false;
+    if (bit_us < 4 || bit_us > 16) return false;
     g_bit_us = bit_us;
     const struct device* dev = DEVICE_DT_GET(DT_PROP(DT_NODELABEL(pio_link), pio));
     g_pio = pio_rpi_pico_get_pio(dev);
@@ -113,6 +113,14 @@ bool joybus_start(unsigned bit_us)
     g_started = true;
     configure();
     return true;
+}
+
+void joybus_set_bit_us(unsigned bit_us)
+{
+    if (bit_us < 4 || bit_us > 16 || bit_us == g_bit_us) return;
+    g_bit_us = bit_us;
+    g_program.length = 0;
+    if (g_started) configure();
 }
 
 void joybus_stop(void)

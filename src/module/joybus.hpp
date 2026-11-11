@@ -22,7 +22,9 @@
  *                     round trip for each (a status changes nothing on the GBA).
  *   0x51 SetWiring    [0x51, wiring]   0xFF: find it (the default); else one of joybusWiring.hpp's
  *        reply (data) [0x53, ...] as GetState
- *   0x52 SetBitLength [0x52, us]       the GameCube's bits: 4 (the default) or 5 us
+ *   0x52 SetBitLength [0x52, us]       the GameCube's bits, 4 to 16 us; 0: find it (the default): until a GBA
+ *                                     answers, status and reset commands go out at 5 us (a console's speed)
+ *                                     and 16 us (for an adapter whose lines are slow) in turn
  *        reply (data) [0x53, ...] as GetState
  *   0x53 GetState     [0x53]
  *        reply (data) [0x53, protocol 3, wiring (0xFF none yet), fixed, bitUs, wiringCount]
@@ -103,4 +105,6 @@ private:
     joybus::WiringSearch m_search;
     uint8_t m_pins = 0xFF;         // the wiring the pins are set up for
     uint8_t m_bitUs = 5;           // a GameCube's bits are 4.94 us
+    bool m_autoBits = true;        // until a GBA answers, 5 and 16 us in turn
+    void useBits(uint8_t bitUs);
 };

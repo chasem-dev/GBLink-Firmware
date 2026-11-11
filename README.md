@@ -181,7 +181,7 @@ In mode `0x08` the adapter does what a GameCube does on a controller port with t
 |:---|:---|:---|
 | `0x50` Transfer | `[0x50, seq, txLen, rxLen, tx…]` (lengths 1–5; `rxLen \| 0x80`: then a status command at once) | `[0x50, seq, result, wiring, n, rx…]`: result 0 replied, 1 no reply, 2 bad request; then, with `0x80`, `[statusResult, 3 status bytes]` |
 | `0x51` SetWiring | `[0x51, wiring]` (`0xFF` find it, the default) | as GetState |
-| `0x52` SetBitLength | `[0x52, 4 to 7]`: the length of the GameCube's bits in µs (default 5; a console's are 4.94) | as GetState |
+| `0x52` SetBitLength | `[0x52, 4 to 16]`: the length of the GameCube's bits in µs; `0` (the default): until a GBA answers, status and reset commands go out at 5 µs (a console's speed) and 16 µs in turn, as an adapter's lines may be too slow for 5 | as GetState |
 | `0x53` GetState | `[0x53]` | `[0x53, protocol (3), wiring (0xFF none yet), fixed, bit µs, wiring count]` |
 | `0x54` Diagnose | `[0x54, flags]` (bit 0: also time how fast the lines it sends on rise) | `[0x54, 1, wiring count, wiring, found \| fixed << 1, bit µs, pins seen high, pins seen low, rise µs of GPIO 0–4, then per wiring: tries (16 bits), replies (16 bits), where the last unanswered command stopped, most reply bits an unanswered one got]` |
 | `0x55` LastReplies | `[0x55]` | `[0x55, 1, partial reply: wiring, bits, where it stopped, the bits (32, low byte first), count (16 bits); odd reply: wiring, 3 bytes, count (16 bits)]` |
