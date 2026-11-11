@@ -188,6 +188,19 @@ int joybus_transfer(const uint8_t* tx, unsigned tx_len, uint8_t* rx, unsigned rx
     return (int)rx_len;
 }
 
+void joybus_drop(uint32_t ms)
+{
+    if (!g_started) return;
+    pio_sm_set_enabled(g_pio, g_sm, false);
+    for (unsigned pin = LINK_PIN_FIRST; pin < LINK_PIN_FIRST + LINK_PIN_COUNT; pin++) {
+        gpio_init(pin);
+        gpio_put(pin, 0);
+        gpio_set_dir(pin, GPIO_OUT);
+    }
+    k_msleep(ms);
+    configure();
+}
+
 void joybus_last_failure(uint8_t* stage, uint8_t* bits)
 {
     *stage = g_fail_stage;

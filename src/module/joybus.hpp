@@ -27,7 +27,7 @@
  *                                     and 16 us (for an adapter whose lines are slow) in turn
  *        reply (data) [0x53, ...] as GetState
  *   0x53 GetState     [0x53]
- *        reply (data) [0x53, protocol 4, wiring (0xFF none yet), fixed, bitUs, wiringCount]
+ *        reply (data) [0x53, protocol 5, wiring (0xFF none yet), fixed, bitUs, wiringCount]
  *   0x54 Diagnose     [0x54, flags]   flags bit 0: also measure how fast the lines the wirings send on rise
  *                                     (each is pulled low for 20 us: only while the GBA isn't answering)
  *        reply (data) [0x54, 1, wiringCount, wiring in use, found | fixed << 1, bitUs,
@@ -36,12 +36,19 @@
  *                      then for each wiring: tries (16 bits, low byte first), replies (16 bits),
  *                      where the last unanswered one stopped (joybusProgram.h's JOYBUS_AT_*), the most
  *                      reply bits an unanswered one got]
- *   0x56 WriteMany    [0x56, seq, count (1..14), count words of 4 bytes]   for sending a program to a GBA
- *                     faster than a USB round trip a word. For each word, as a GameCube game does: the write,
- *                     then a status command until the GBA has taken the word (its receive flag clear; asked
- *                     again for up to 100 ms), stopping if the GBA doesn't answer.
- *        reply (data) [0x56, seq, result, words written, the last status byte]
+ *   0x56 WriteMany    [0x56, seq, count (1..14), ack, count words of 4 bytes]   for sending a program to a
+ *                     GBA faster than a USB round trip a word. For each word, as a GameCube game does: the
+ *                     write, then a status command until the GBA has taken the word (its receive flag clear;
+ *                     asked again for up to 100 ms). `ack`: the status bits the GBA flips with each word it
+ *                     takes (0x10 for a multiboot; 0: none). With it, a write whose reply is lost is sent
+ *                     again only if the status shows the word didn't arrive. A GBA that says nothing is asked
+ *                     again for 50 ms before the batch is given up.
+ *        reply (data) [0x56, seq, result, words written, the last status byte, the step that failed
+ *                      (0 a write, 1 a status), writes sent again, statuses asked again]
  *                     result 0: all written and taken; 1: no reply; 4: a word was never taken
+ *   0x57 Drop         [0x57, tenths of a second (1..50)]   every link line held low that long, as when the
+ *                     adapter is unplugged: a GBA running a program a GameCube sent it restarts
+ *        reply (data) [0x57, 1]
  *   0x55 LastReplies  [0x55]          what came back that wasn't a whole GBA reply, for seeing a link that half works
  *        reply (data) [0x55, 1, partial: wiring, bits, where it stopped, the bits (32, low byte first; the first
  *                      received highest of them), how many so far (16 bits);
@@ -55,7 +62,7 @@
 class JoybusModule : public IModule
 {
 public:
-    static constexpr uint8_t protocolVersion = 4;
+    static constexpr uint8_t protocolVersion = 5;
 
     enum class Command : uint8_t
     {
@@ -66,6 +73,7 @@ public:
         Diagnose = 0x54,
         LastReplies = 0x55,
         WriteMany = 0x56,
+        Drop = 0x57,
     };
 
     JoybusModule();

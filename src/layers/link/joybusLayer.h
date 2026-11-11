@@ -33,6 +33,10 @@ void joybus_set_pins(unsigned tx_pin, unsigned rx_pin, bool invert_tx, bool inve
 #define JOYBUS_GAP_US 150u
 int joybus_transfer(const uint8_t* tx, unsigned tx_len, uint8_t* rx, unsigned rx_len, uint32_t slack_us);
 
+/* What unplugging the adapter does to the GBA: every link line held low for `ms`, then the lines as
+ * they were. A GBA running a program a GameCube sent it restarts when this happens. */
+void joybus_drop(uint32_t ms);
+
 /* Why the last joybus_transfer returned -1: where the program was waiting (JOYBUS_AT_* in
  * joybusProgram.h), and how many of the reply's bits had come. */
 void joybus_last_failure(uint8_t* stage, uint8_t* bits);

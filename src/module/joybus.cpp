@@ -88,6 +88,13 @@ void JoybusModule::handle(const Request& request)
         return sendLastReplies();
     case Command::WriteMany:
         return writeMany(request);
+    case Command::Drop: {
+        const unsigned tenths = request.length >= 2 ? request.data[1] : 0;
+        if (tenths >= 1 && tenths <= 50) joybus_drop(tenths * 100);
+        const uint8_t done[] = { static_cast<uint8_t>(Command::Drop), 1 };
+        Transport::sendData(std::span<const uint8_t>(done, sizeof(done)));
+        return;
+    }
     }
 }
 
@@ -250,35 +257,60 @@ void JoybusModule::sendLastReplies()
 
 void JoybusModule::writeMany(const Request& request)
 {
-    uint8_t reply[5] = { static_cast<uint8_t>(Command::WriteMany), request.length >= 2 ? request.data[1] : uint8_t(0), 2, 0, 0 };
+    uint8_t reply[8] = { static_cast<uint8_t>(Command::WriteMany), request.length >= 2 ? request.data[1] : uint8_t(0), 2, 0, 0, 0, 0, 0 };
     const unsigned count = request.length >= 3 ? request.data[2] : 0;
-    if (count < 1 || count > 14 || request.length < 3 + count * 4) {
+    if (count < 1 || count > 14 || request.length < 4 + count * 4) {
         Transport::sendData(std::span<const uint8_t>(reply, sizeof(reply)));
         return;
     }
+    const uint8_t ack = request.data[3] & 0x30;
     const uint8_t wiring = m_search.wiring();
     static const uint8_t status[] = { 0x00 };
-    uint8_t result = 0, done = 0, last = 0;
-    for (unsigned i = 0; i < count && !result; i++) {
-        uint8_t tx[5] = { 0x15, request.data[3 + i * 4], request.data[4 + i * 4], request.data[5 + i * 4], request.data[6 + i * 4] };
-        uint8_t rx[1];
-        if (sendOn(wiring, tx, 5, rx, 1) != 1) { result = 1; break; }
-        done++;
-        /* the GBA has taken the word when its receive flag is clear: a game waits up to 100 ms for that */
-        for (unsigned tries = 0;; tries++) {
-            uint8_t st[3];
-            /* a status changes nothing on the GBA: one that goes unanswered is asked again */
-            int n = -1;
-            for (unsigned again = 0; again < 4 && !(n == 3 && joybus::isGbaType(st, 3)); again++) n = sendOn(wiring, status, 1, st, 3);
-            if (n != 3 || !joybus::isGbaType(st, 3)) { result = 1; break; }
-            last = st[2];
-            if (!(st[2] & 0x02)) break;
-            if (tries >= 400) { result = 4; break; }
-            k_busy_wait(250);
+    uint8_t result = 0, done = 0, last = 0, step = 0, resent = 0, reasked = 0;
+    bool known = false;   // `last` is a status read in this batch
+
+    /* The GBA's status, asked again while it says nothing: for 50 ms, 2 ms apart after the first few. */
+    auto ask = [&](uint8_t* st) {
+        for (unsigned again = 0; again < 28; again++) {
+            if (sendOn(wiring, status, 1, st, 3) == 3 && joybus::isGbaType(st, 3)) return true;
+            if (reasked < 0xFF) reasked++;
+            if (again >= 3) k_busy_wait(2000);
         }
+        return false;
+    };
+
+    for (unsigned i = 0; i < count && !result; i++) {
+        const uint8_t tx[5] = { 0x15, request.data[4 + i * 4], request.data[5 + i * 4], request.data[6 + i * 4], request.data[7 + i * 4] };
+        uint8_t rx[1], st[3];
+        bool taken = false;
+        for (unsigned sends = 0; sends < 4 && !taken && !result; sends++) {
+            const bool replied = sendOn(wiring, tx, 5, rx, 1) == 1;
+            /* the GBA has taken the word when its receive flag is clear: a game waits up to 100 ms for that */
+            for (unsigned tries = 0;; tries++) {
+                if (!ask(st)) { result = 1; step = 1; break; }
+                if (!(st[2] & 0x02)) break;
+                if (tries >= 400) { result = 4; step = 1; break; }
+                k_busy_wait(250);
+            }
+            if (result) break;
+            /* A write that got its reply arrived. One that didn't may have: the GBA's flags say (they flip with
+             * each word it takes), when the sender has said which and they were read before this word. */
+            taken = replied || !ack || !known || ((st[2] ^ last) & ack) == ack;
+            if (!taken) {
+                if (sends == 3) { result = 1; step = 0; }
+                else if (resent < 0xFF) resent++;
+            }
+        }
+        if (result) break;
+        last = st[2];
+        known = true;
+        done++;
     }
     reply[2] = result;
     reply[3] = done;
     reply[4] = last;
+    reply[5] = step;
+    reply[6] = resent;
+    reply[7] = reasked;
     Transport::sendData(std::span<const uint8_t>(reply, sizeof(reply)));
 }
