@@ -98,6 +98,26 @@ void JoybusModule::handle(const Request& request)
     }
 }
 
+/* Found with slow bits: a console's speed is tried again, with a status (which changes nothing on the GBA),
+ * as everything is quicker at it (a program goes to the GBA in 30 s, not 55). On each of the next dozen
+ * commands, as a GBA just come on misses commands for a moment, and on every 16th after that for as long
+ * as the bits are slow: the dozen can all fall while the GBA restarts, before a program is sent. */
+void JoybusModule::tryFastBits()
+{
+    if (!m_autoBits || !m_search.isFound() || m_bitUs == 5) return;
+    if (m_fastTries >= 12) {
+        if (++m_fastSkipped < 16) return;
+        m_fastSkipped = 0;
+    } else {
+        m_fastTries++;
+    }
+    static const uint8_t status[] = { 0x00 };
+    uint8_t fast[3];
+    const uint8_t slow = m_bitUs;
+    useBits(5);
+    if (!(sendOn(m_search.wiring(), status, 1, fast, 3) == 3 && joybus::isGbaType(fast, 3))) useBits(slow);
+}
+
 void JoybusModule::useBits(uint8_t bitUs)
 {
     if (bitUs == m_bitUs) return;
@@ -174,16 +194,8 @@ void JoybusModule::transfer(const Request& request)
     const bool wasFound = m_search.isFound();
     int n = m_search.transfer(send, &request.data[4], txLen, &reply[5], rxLen);
     usePins(m_search.wiring());   // back on the wiring in use after a search that found nothing
-    if (!wasFound && m_search.isFound()) m_fastTries = 0;
-    if (probe && m_autoBits && m_search.isFound() && m_bitUs != 5 && m_fastTries < 12) {
-        /* Found with slow bits: a console's speed is tried again on the next dozen statuses, as everything
-         * after is quicker at it (a program goes to the GBA in 30 s, not 55). One try was too few: a GBA
-         * just come on misses commands for a moment. */
-        uint8_t fast[3];
-        m_fastTries++;
-        useBits(5);
-        if (!(sendOn(m_search.wiring(), &request.data[4], 1, fast, 3) == 3 && joybus::isGbaType(fast, 3))) useBits(16);
-    }
+    if (!wasFound && m_search.isFound()) { m_fastTries = 0; m_fastSkipped = 0; }
+    if (probe) tryFastBits();
     reply[2] = n > 0 ? 0 : 1;
     reply[3] = m_search.wiring();
     reply[4] = n > 0 ? static_cast<uint8_t>(n) : 0;
@@ -196,6 +208,7 @@ void JoybusModule::transfer(const Request& request)
         s[0] = k == 3 ? 0 : 1;
         if (k != 3) s[1] = s[2] = s[3] = 0;
         length += 4;
+        if (k == 3) tryFastBits();   // (a program going to the GBA is all writes: the statuses are these)
     }
     Transport::sendData(std::span<const uint8_t>(reply, length));
 }
