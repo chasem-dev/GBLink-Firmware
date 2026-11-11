@@ -69,12 +69,10 @@ void JoybusModule::handle(const Request& request)
         }
         return sendState();
     case Command::SetBitLength:
-        if (request.length >= 2 && request.data[1] >= 4 && request.data[1] <= 7 && request.data[1] != m_bitUs) {
-            m_bitUs = request.data[1];
-            joybus_stop();
-            joybus_start(m_bitUs);
-            m_pins = 0xFF;
-            usePins(m_search.wiring());
+        if (request.length >= 2 && request.data[1] == 0) m_autoBits = true;
+        else if (request.length >= 2 && request.data[1] >= 4 && request.data[1] <= 16) {
+            m_autoBits = false;
+            useBits(request.data[1]);
         }
         return sendState();
     case Command::GetState:
@@ -84,6 +82,13 @@ void JoybusModule::handle(const Request& request)
     case Command::LastReplies:
         return sendLastReplies();
     }
+}
+
+void JoybusModule::useBits(uint8_t bitUs)
+{
+    if (bitUs == m_bitUs) return;
+    m_bitUs = bitUs;
+    joybus_set_bit_us(bitUs);
 }
 
 void JoybusModule::usePins(uint8_t wiring)
@@ -149,6 +154,9 @@ void JoybusModule::transfer(const Request& request)
     auto send = [this](uint8_t wiring, const uint8_t* tx, unsigned txLen, uint8_t* rx, unsigned rxLen) {
         return sendOn(wiring, tx, txLen, rx, rxLen);
     };
+    /* until a GBA answers: a console's speed and a slow one in turn, for an adapter whose lines are slow */
+    const bool probe = txLen == 1 && rxLen == 3 && (request.data[4] == 0x00 || request.data[4] == 0xFF);
+    if (probe && m_autoBits && !m_search.isFound()) useBits(m_bitUs == 5 ? 16 : 5);
     const int n = m_search.transfer(send, &request.data[4], txLen, &reply[5], rxLen);
     usePins(m_search.wiring());   // back on the wiring in use after a search that found nothing
     reply[2] = n > 0 ? 0 : 1;

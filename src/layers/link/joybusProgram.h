@@ -75,12 +75,12 @@ extern "C" {
 #define JOYBUS_OFFSET_START 0u
 
 /* Build the program into out (JOYBUS_PROGRAM_MAX words); `bit_us` is the length of the bits the
- * GameCube sends (4 to 7; a console's are 4.94), `push_pull` how the TX pin is driven. Returns
+ * GameCube sends (4 to 16; a console's are 4.94, and a GBA takes them as slow as 160), `push_pull` how the TX pin is driven. Returns
  * the length, or 0 for a length it can't make. *wrap gets the last instruction (it wraps to the
  * start). */
 static inline unsigned joybus_build_program(uint16_t* out, unsigned bit_us, int push_pull, unsigned* wrap)
 {
-    if (bit_us < 4 || bit_us > 7) return 0;
+    if (bit_us < 4 || bit_us > 16) return 0;   /* (an instruction's delay is at most 31 cycles: 2q - 2) */
     const unsigned q = bit_us;   /* a quarter of a bit, in cycles: 4 cycles a microsecond */
     const uint16_t low = push_pull ? JB_SET_PINS(0) : JB_SET_PINDIRS(1);
     const uint16_t high = push_pull ? JB_SET_PINS(1) : JB_SET_PINDIRS(0);
