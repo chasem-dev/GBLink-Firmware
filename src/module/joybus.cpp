@@ -174,9 +174,13 @@ void JoybusModule::transfer(const Request& request)
     const bool wasFound = m_search.isFound();
     int n = m_search.transfer(send, &request.data[4], txLen, &reply[5], rxLen);
     usePins(m_search.wiring());   // back on the wiring in use after a search that found nothing
-    if (probe && m_autoBits && !wasFound && m_search.isFound() && m_bitUs != 5) {
-        /* found with slow bits: a console's speed is tried once more, as everything after is quicker at it */
+    if (!wasFound && m_search.isFound()) m_fastTries = 0;
+    if (probe && m_autoBits && m_search.isFound() && m_bitUs != 5 && m_fastTries < 12) {
+        /* Found with slow bits: a console's speed is tried again on the next dozen statuses, as everything
+         * after is quicker at it (a program goes to the GBA in 30 s, not 55). One try was too few: a GBA
+         * just come on misses commands for a moment. */
         uint8_t fast[3];
+        m_fastTries++;
         useBits(5);
         if (!(sendOn(m_search.wiring(), &request.data[4], 1, fast, 3) == 3 && joybus::isGbaType(fast, 3))) useBits(16);
     }
@@ -268,6 +272,8 @@ void JoybusModule::writeMany(const Request& request)
     static const uint8_t status[] = { 0x00 };
     uint8_t result = 0, done = 0, last = 0, step = 0, resent = 0, reasked = 0;
     bool known = false;   // `last` is a status read in this batch
+    const uint32_t wordCycles = k_us_to_cyc_ceil32(950);
+    static uint32_t lastWrite = 0;   // when the last word of any batch was sent
 
     /* The GBA's status, asked again while it says nothing: for 50 ms, 2 ms apart after the first few. */
     auto ask = [&](uint8_t* st) {
@@ -284,6 +290,10 @@ void JoybusModule::writeMany(const Request& request)
         uint8_t rx[1], st[3];
         bool taken = false;
         for (unsigned sends = 0; sends < 4 && !taken && !result; sends++) {
+            /* Words no closer than a console sends them (0.92 ms): a GBA took three in quick succession and
+             * then ignored a write, four times over. */
+            while (k_cycle_get_32() - lastWrite < wordCycles) {}
+            lastWrite = k_cycle_get_32();
             const bool replied = sendOn(wiring, tx, 5, rx, 1) == 1;
             /* the GBA has taken the word when its receive flag is clear: a game waits up to 100 ms for that */
             for (unsigned tries = 0;; tries++) {

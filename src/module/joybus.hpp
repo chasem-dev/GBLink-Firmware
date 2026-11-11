@@ -122,5 +122,6 @@ private:
     uint8_t m_pins = 0xFF;         // the wiring the pins are set up for
     uint8_t m_bitUs = 5;           // a GameCube's bits are 4.94 us
     bool m_autoBits = true;        // until a GBA answers, 5 and 16 us in turn
+    uint8_t m_fastTries = 0;       // found with 16 us bits: how often 5 us has been tried since
     void useBits(uint8_t bitUs);
 };
