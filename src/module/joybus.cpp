@@ -164,8 +164,15 @@ void JoybusModule::transfer(const Request& request)
     /* until a GBA answers: a console's speed and a slow one in turn, for an adapter whose lines are slow */
     const bool probe = txLen == 1 && rxLen == 3 && (request.data[4] == 0x00 || request.data[4] == 0xFF);
     if (probe && m_autoBits && !m_search.isFound()) useBits(m_bitUs == 5 ? 16 : 5);
-    const int n = m_search.transfer(send, &request.data[4], txLen, &reply[5], rxLen);
+    const bool wasFound = m_search.isFound();
+    int n = m_search.transfer(send, &request.data[4], txLen, &reply[5], rxLen);
     usePins(m_search.wiring());   // back on the wiring in use after a search that found nothing
+    if (probe && m_autoBits && !wasFound && m_search.isFound() && m_bitUs != 5) {
+        /* found with slow bits: a console's speed is tried once more, as everything after is quicker at it */
+        uint8_t fast[3];
+        useBits(5);
+        if (!(sendOn(m_search.wiring(), &request.data[4], 1, fast, 3) == 3 && joybus::isGbaType(fast, 3))) useBits(16);
+    }
     reply[2] = n > 0 ? 0 : 1;
     reply[3] = m_search.wiring();
     reply[4] = n > 0 ? static_cast<uint8_t>(n) : 0;
@@ -260,7 +267,10 @@ void JoybusModule::writeMany(const Request& request)
         /* the GBA has taken the word when its receive flag is clear: a game waits up to 100 ms for that */
         for (unsigned tries = 0;; tries++) {
             uint8_t st[3];
-            if (sendOn(wiring, status, 1, st, 3) != 3 || !joybus::isGbaType(st, 3)) { result = 1; break; }
+            /* a status changes nothing on the GBA: one that goes unanswered is asked again */
+            int n = -1;
+            for (unsigned again = 0; again < 4 && !(n == 3 && joybus::isGbaType(st, 3)); again++) n = sendOn(wiring, status, 1, st, 3);
+            if (n != 3 || !joybus::isGbaType(st, 3)) { result = 1; break; }
             last = st[2];
             if (!(st[2] & 0x02)) break;
             if (tries >= 400) { result = 4; break; }
